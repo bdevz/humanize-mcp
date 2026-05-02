@@ -1,93 +1,305 @@
-# humanizer-mcp
+# humanize-mcp
 
-MCP server that removes AI tells from text. Works with Claude Code and Claude Desktop.
+An MCP server that removes AI fingerprints from text. Works with Claude Code, Claude Desktop, Cursor, and any MCP-compatible client.
 
-## The problem
+## The Problem
 
-When Claude writes text, it leaves fingerprints: em dashes everywhere, words like "crucial" and "delve", parallel structures like "Not only X, but Y". Prompt-based rules and skills don't reliably fix this — the model loads the rules but still generates AI-sounding text.
+AI-generated text has tells. Em dashes everywhere. Words like "crucial" and "delve." Structures like "Not only X, but Y." Readers spot these patterns — and so do AI detectors.
 
-This MCP server runs **actual code** on the output. Deterministic regex replacements that can't be bypassed.
+Prompt-based rules ("don't use em dashes") fail because LLMs can't reliably follow negative constraints during generation. The model loads your instructions, then ignores them mid-sentence.
 
-## What it does
+This MCP server takes a different approach: it runs **deterministic code on the output**, after the AI finishes writing. Regex replacements that can't be bypassed. The model doesn't get a choice.
 
-**Tier 1 (always runs, no API key needed):**
-- 30+ deterministic regex replacements
-- Em dashes and en dashes → periods
-- Curly quotes → straight quotes
-- Banned phrase removal ("In order to" → "To", "Due to the fact that" → "Because")
-- Copula fixes ("serves as" → "is", "boasts" → "has")
-- Contraction enforcement ("do not" → "don't", "cannot" → "can't")
-- 20+ filler phrase removals
+## How It Works
 
-**Tier 2 (needs ANTHROPIC_API_KEY):**
-- Detects ~40 AI vocabulary words per sentence
-- Detects 5 structural patterns (not only/but, observation-announcements, reframe patterns)
-- Detects rule-of-three with abstract nouns
-- Surgically rewrites only flagged sentences via Claude API
-- Runs deterministic cleanup again on the rewrite
-
-## Install
-
-Add to your Claude Code config. Run `claude mcp add` or manually edit your MCP config:
-
-### Without API key (Tier 1 only — regex cleanup)
-
-```json
-{
-  "humanizer": {
-    "command": "npx",
-    "args": ["-y", "humanizer-mcp"]
-  }
-}
+```
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐
+│  AI writes   │────▶│   Tier 1     │────▶│   Tier 2     │────▶ Clean text
+│  text        │     │  (regex)     │     │  (surgical)  │
+└─────────────┘     └──────────────┘     └──────────────┘
+                     Always runs          Needs API key
+                     30+ rules            Per-sentence AI fix
+                     Instant              ~1s per flagged sentence
 ```
 
-### With API key (full pipeline — Tier 1 + Tier 2)
+### Tier 1 — Deterministic Regex (always runs, no API key)
 
-```json
-{
-  "humanizer": {
-    "command": "npx",
-    "args": ["-y", "humanizer-mcp"],
-    "env": {
-      "ANTHROPIC_API_KEY": "sk-ant-..."
-    }
-  }
-}
-```
+Runs 30+ find-and-replace rules on every character of the text:
 
-Restart Claude Code after adding the config.
+| Category | Example | Becomes |
+|----------|---------|---------|
+| Em dashes | "results — especially" | "results. especially" |
+| Curly quotes | "smart quotes" | "smart quotes" |
+| Banned phrases | "In order to" | "To" |
+| Copula fixes | "serves as" | "is" |
+| Contractions | "do not" | "don't" |
+| Filler removal | "It is important to note that" | *(removed)* |
+
+This is code, not a suggestion. Every rule fires on every run.
+
+### Tier 2 — Surgical AI Fix (needs `ANTHROPIC_API_KEY`)
+
+Scans each sentence individually for deeper patterns:
+
+**AI Vocabulary (~40 words):**
+`crucial`, `delve`, `landscape`, `pivotal`, `underscore`, `showcase`, `foster`, `leverage`, `navigate`, `testament`, `tapestry`, `interplay`, `intricate`, `robust`, `holistic`, `synergy`, `paradigm`, `transformative`, `nuanced`, `multifaceted`, `myriad`, and more.
+
+**Structural Patterns (5 types):**
+- "Not only X, but also Y"
+- "It's not just X, it's Y"
+- "What strikes me / What stands out" (observation-announcement)
+- "The X isn't Y — it's Z" (reframe)
+- "The deeper issue" / "fundamentally" (persuasive authority)
+
+**Rule-of-Three with Abstract Nouns:**
+"innovation, inspiration, and growth" — flagged. "apples, oranges, and bananas" — not flagged.
+
+When a sentence is flagged, only that sentence gets sent to a small Claude API call for rewriting. The rewrite then gets run through Tier 1 again, so even the fix gets cleaned.
 
 ## Tools
+
+The server exposes two tools:
 
 ### `humanize`
 
 Cleans AI tells from text.
 
-**Parameters:**
-- `text` (string, required) — The text to humanize
-- `mode` ("inline" | "multiline", default: "inline") — Use "multiline" for blog posts, newsletters, or any text with intentional line breaks
-
-**Example usage in Claude:** "Humanize this blog post" or "Run the humanize tool on the text above"
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `text` | string | *(required)* | The text to clean |
+| `mode` | `"inline"` or `"multiline"` | `"inline"` | Use `"multiline"` for blog posts or text with line breaks |
 
 ### `check_ai_tells`
 
-Analyzes text and reports what AI patterns were found, without changing anything.
+Reports what AI patterns exist in the text without changing anything. Returns a detection report.
 
-**Parameters:**
-- `text` (string, required) — The text to analyze
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `text` | string | The text to analyze |
 
-Returns a report showing which sentences are flagged, what problems were detected, and whether Tier 1 cleanup would change the text.
+## Install
+
+### Claude Code
+
+```bash
+claude mcp add humanize-mcp -- npx -y humanize-mcp
+```
+
+For Tier 2 (with surgical AI fixes):
+
+```bash
+claude mcp add humanize-mcp -e ANTHROPIC_API_KEY=sk-ant-... -- npx -y humanize-mcp
+```
+
+### Claude Desktop / Cursor / Other MCP Clients
+
+Add to your MCP config file:
+
+**Tier 1 only (free, no API key):**
+
+```json
+{
+  "mcpServers": {
+    "humanize-mcp": {
+      "command": "npx",
+      "args": ["-y", "humanize-mcp"]
+    }
+  }
+}
+```
+
+**Tier 1 + Tier 2 (needs API key):**
+
+```json
+{
+  "mcpServers": {
+    "humanize-mcp": {
+      "command": "npx",
+      "args": ["-y", "humanize-mcp"],
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-ant-..."
+      }
+    }
+  }
+}
+```
+
+Restart your client after adding the config.
+
+## Usage Examples
+
+### Example 1: Clean a LinkedIn post
+
+You: "Write me a LinkedIn post about remote work, then humanize it"
+
+Claude writes the post, then calls the `humanize` tool. The output comes back with em dashes replaced, "crucial" swapped out, contractions enforced.
+
+### Example 2: Check before publishing
+
+You: "Run check_ai_tells on this blog post: [paste text]"
+
+Output:
+```
+## AI Tell Detection Report
+
+Sentences analyzed: 42
+Sentences with Tier 2 problems: 3
+Total problems found: 4
+Tier 1 issues (regex-fixable): Yes
+
+### Flagged Sentences
+
+> This paradigm shift leverages cutting-edge AI to navigate complex challenges.
+- AI vocabulary: paradigm, leverages, navigate
+
+> Not only does it improve speed, but it also transforms accuracy.
+- AI structural pattern detected
+
+> The platform fosters innovation, collaboration, and growth.
+- AI vocabulary: fosters
+- Rule-of-three with abstract nouns
+```
+
+### Example 3: Clean a blog post (multiline)
+
+You: "Humanize this in multiline mode: [paste text]"
+
+Multiline mode preserves your intentional line breaks — blank lines stay blank, each paragraph gets cleaned independently.
+
+### Example 4: Iterative workflow
+
+1. Ask Claude to write something
+2. Run `check_ai_tells` to see what's flagged
+3. Decide if you care (1-2 flags on 50 sentences? Probably fine)
+4. Run `humanize` if you want to auto-fix
+
+## Architecture
+
+```
+humanize-mcp/
+├── index.js          # MCP server — tool definitions + stdio transport
+├── humanizer.js      # Core engine — all detection and fix logic
+├── package.json
+└── README.md
+```
+
+### index.js — MCP Server (53 lines)
+
+Registers two tools (`humanize` and `check_ai_tells`) with the MCP SDK and connects via stdio transport. Thin wrapper — all logic lives in `humanizer.js`.
+
+### humanizer.js — Core Engine (229 lines)
+
+Four layers:
+
+```
+┌─────────────────────────────────────────────────┐
+│  deAI(text)                                     │
+│  Tier 1: 30+ regex rules                        │
+│  Em dashes, curly quotes, banned phrases,       │
+│  copula fixes, contractions, cleanup artifacts  │
+└────────────────────┬────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────┐
+│  detectProblems(sentence)                       │
+│  Tier 2 detection: AI vocab (~40 words),        │
+│  5 structural patterns, rule-of-three           │
+│  Returns array of problem descriptions          │
+└────────────────────┬────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────┐
+│  fixSentence(sentence, problems, apiKey)        │
+│  Sends ONE flagged sentence to Claude API       │
+│  Small, focused prompt: "rewrite this sentence  │
+│  to fix [specific problem]"                     │
+└────────────────────┬────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────┐
+│  humanize(text, key) / humanizePost(text, key)  │
+│  Full pipeline: deAI → split → detect →         │
+│  fix flagged → deAI again on fixes              │
+└─────────────────────────────────────────────────┘
+```
+
+### Data Flow
+
+```
+Input text
+    │
+    ▼
+deAI() ─── Tier 1 regex cleanup (always)
+    │
+    ▼
+splitSentences() ─── Break into individual sentences
+    │
+    ▼
+detectProblems() ─── Check each sentence for Tier 2 patterns
+    │
+    ├── No problems → keep sentence as-is
+    │
+    └── Problems found → fixSentence() via Claude API
+                              │
+                              ▼
+                         deAI() again ─── Clean the AI's fix too
+    │
+    ▼
+Join sentences → final deAI() pass → Output
+```
+
+### Why This Architecture?
+
+**Why not just prompt the AI to write better?**
+LLMs can't reliably suppress patterns during generation. "Don't use em dashes" gets loaded into context, then ignored when the model predicts the next token. Deterministic post-processing is the only reliable approach.
+
+**Why surgical per-sentence fixes instead of rewriting the whole text?**
+Rewriting the whole text through an AI would re-introduce the same patterns. By isolating individual sentences and giving a tiny, focused prompt ("rewrite this one sentence to remove 'crucial'"), the model has a much smaller task and is less likely to introduce new tells. And `deAI()` runs on the fix too, as a safety net.
+
+**Why two tiers?**
+Tier 1 catches the obvious, mechanical patterns (em dashes, curly quotes, stock phrases). It's free, instant, and deterministic. Tier 2 catches subtler patterns (word choice, sentence structure) that need AI judgment to fix properly. Users who want the free version still get significant value.
 
 ## Requirements
 
 - Node.js 18+
+- For Tier 2: an Anthropic API key (`ANTHROPIC_API_KEY`)
 
-## How it works
+## What Gets Detected
 
-Unlike prompt-based skills that ask the AI to follow rules (which it often ignores), this server runs deterministic code:
+### Tier 1 — Deterministic (28 banned phrases, 6 copula fixes, 24 contraction rules)
 
-1. **Tier 1:** Regex replacements run on every character of the text. Em dashes get replaced with periods. "Serves as" becomes "is". Every contraction gets enforced. This is code, not a suggestion.
+**Banned phrases** — removed or simplified:
+- "In order to" → "To"
+- "Due to the fact that" → "Because"
+- "Has the ability to" → "Can"
+- "In the event that" → "If"
+- "At this point in time" → "Now"
+- "It is important to note that" → *(removed)*
+- "Here's the thing" → *(removed)*
+- "Let's dive in" → *(removed)*
+- "Without further ado" → *(removed)*
+- And 19 more
 
-2. **Tier 2:** Each sentence is scanned for known AI vocabulary and structural patterns. Only flagged sentences get sent to a small Claude call for rewriting. The rewrite then gets run through Tier 1 again, so even the fix gets cleaned.
+**Copula fixes** — deflated verbs:
+- "serves as" → "is"
+- "stands as" → "is"
+- "acts as" → "is"
+- "functions as" → "is"
+- "boasts" → "has"
+- "features" → "has"
 
-The model can't "pretend" to apply these rules. The code runs after generation, on the actual output.
+**Contractions** — enforced everywhere:
+- "do not" → "don't"
+- "cannot" → "can't"
+- "I am" → "I'm"
+- "it is" → "it's"
+- And 20 more
+
+### Tier 2 — AI Pattern Detection
+
+**~40 AI vocabulary words** including: crucial, delve, landscape, pivotal, underscore, showcase, foster, leverage, navigate, testament, tapestry, interplay, intricate, robust, holistic, synergy, paradigm, transformative, nuanced, multifaceted, myriad, vital, enduring, vibrant, profound, groundbreaking, nestled, renowned, elevate, empower, streamline, garnered, encompasses.
+
+**5 structural patterns:** not-only-but, it's-not-just, observation-announcement, reframe, persuasive authority.
+
+**Rule-of-three** with abstract nouns (innovation, inspiration, growth, excellence, etc.)
+
+## License
+
+MIT

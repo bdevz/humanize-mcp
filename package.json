@@ -1,10 +1,10 @@
 {
-  "name": "humanizer-mcp",
+  "name": "humanize-mcp",
   "version": "1.0.0",
   "description": "MCP server that removes AI tells from text using deterministic regex cleanup and optional surgical AI fixes",
   "type": "module",
   "bin": {
-    "humanizer-mcp": "./index.js"
+    "humanize-mcp": "./index.js"
   },
   "main": "index.js",
   "engines": {
