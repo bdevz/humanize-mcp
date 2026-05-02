@@ -1,7 +1,7 @@
 {
   "name": "humanize-mcp",
-  "version": "2.0.0",
-  "description": "MCP server that removes AI tells from text using deterministic regex cleanup and optional surgical AI fixes",
+  "version": "2.0.1",
+  "description": "MCP tool that removes AI fingerprints from text. No API keys. Works with Claude Code, Claude Desktop, and Cursor.",
   "type": "module",
   "bin": {
     "humanize-mcp": "./index.js"
