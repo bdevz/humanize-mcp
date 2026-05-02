@@ -1,4 +1,4 @@
-// Humanizer module — deterministic cleanup + pattern detection + surgical fix
+// Humanizer module — deterministic cleanup + pattern detection
 // Adapted from linkedin-formatter/api/_humanizer.js
 
 // ── Tier 1: Deterministic replacements (100% reliable) ──
@@ -102,7 +102,7 @@ export function deAI(text) {
   return t.trim();
 }
 
-// ── Tier 2: Pattern detection + surgical AI fix ──
+// ── Tier 2: Pattern detection ──
 
 const AI_VOCAB = /\b(crucial|delve|landscape|pivotal|underscore|underscores|showcase|showcases|showcasing|foster|fosters|fostering|leverage|leveraging|navigate|navigating|testament|tapestry|interplay|intricate|intricacies|garnered|encompasses|encompassing|vital|enduring|vibrant|profound|groundbreaking|nestled|renowned|elevate|elevating|empower|empowering|streamline|streamlining|robust|holistic|synergy|paradigm|transformative|nuanced|multifaceted|myriad)\b/gi;
 
@@ -119,7 +119,7 @@ const STRUCTURAL_PATTERNS = [
   /\b(the deeper issue|the heart of the matter|fundamentally|in reality|what people miss)\b/gi,
 ];
 
-// Split text into sentences for surgical fixes
+// Split text into sentences for per-sentence detection
 export function splitSentences(text) {
   return text.split(/(?<=[.!?])\s+/).filter(Boolean);
 }
@@ -162,67 +162,4 @@ export function detectProblems(sentence) {
   }
 
   return problems;
-}
-
-const SENTENCE_FIX_SYSTEM = `Rewrite this single sentence to sound like a real person typed it casually. Remove the specific problem noted. Keep the same meaning. Use simple words, contractions, and casual tone. Return ONLY the rewritten sentence.`;
-
-async function fixSentence(sentence, problems, key) {
-  try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 256,
-        system: SENTENCE_FIX_SYSTEM,
-        messages: [{
-          role: 'user',
-          content: `PROBLEMS: ${problems.join('; ')}\nSENTENCE: ${sentence}`,
-        }],
-      }),
-    });
-    if (!res.ok) return sentence;
-    const data = await res.json();
-    return data.content[0].text.trim();
-  } catch {
-    return sentence; // fallback to original
-  }
-}
-
-// ── Main humanize pipeline ──
-
-export async function humanize(text, key) {
-  // Pass 1: Deterministic cleanup
-  let cleaned = deAI(text);
-
-  // Pass 2: Detect Tier 2 patterns, fix surgically
-  const sentences = splitSentences(cleaned);
-  const fixed = await Promise.all(
-    sentences.map(async (sentence) => {
-      const problems = detectProblems(sentence);
-      if (problems.length === 0) return sentence;
-      const rewritten = await fixSentence(sentence, problems, key);
-      return deAI(rewritten); // run deAI on the fix too
-    })
-  );
-  cleaned = fixed.join(' ');
-
-  // Final deAI pass to catch anything the surgical fixes introduced
-  return deAI(cleaned);
-}
-
-// For multi-line text (posts), preserve line breaks
-export async function humanizePost(text, key) {
-  const lines = text.split('\n');
-  const processed = await Promise.all(
-    lines.map(async (line) => {
-      if (!line.trim()) return '';
-      return humanize(line, key);
-    })
-  );
-  return processed.join('\n');
 }

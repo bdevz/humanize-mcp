@@ -2,6 +2,8 @@
 
 An MCP server that removes AI fingerprints from text. Works with Claude Code, Claude Desktop, Cursor, and any MCP-compatible client.
 
+**No API keys. No external calls. Pure deterministic code.**
+
 ## The Problem
 
 AI-generated text has tells. Em dashes everywhere. Words like "crucial" and "delve." Structures like "Not only X, but Y." Readers spot these patterns — and so do AI detectors.
@@ -13,33 +15,36 @@ This MCP server takes a different approach: it runs **deterministic code on the 
 ## How It Works
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│  AI writes   │────▶│   Tier 1     │────▶│   Tier 2     │────▶ Clean text
-│  text        │     │  (regex)     │     │  (surgical)  │
-└─────────────┘     └──────────────┘     └──────────────┘
-                     Always runs          Needs API key
-                     30+ rules            Per-sentence AI fix
-                     Instant              ~1s per flagged sentence
+┌─────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  AI writes   │────▶│  humanize tool    │────▶│  AI reads report  │
+│  text        │     │  (regex cleanup   │     │  rewrites flagged │
+└─────────────┘     │  + detection)     │     │  sentences        │
+                     └──────────────────┘     └────────┬─────────┘
+                                                       │
+                                              ┌────────▼─────────┐
+                                              │  humanize again   │
+                                              │  (clean the fix)  │
+                                              └──────────────────┘
 ```
 
-### Tier 1 — Deterministic Regex (always runs, no API key)
+The MCP server handles two things:
+1. **Regex cleanup** — 30+ deterministic rules that fix mechanical AI patterns instantly
+2. **Detection** — flags sentences with AI vocabulary and structural patterns
 
-Runs 30+ find-and-replace rules on every character of the text:
+The intelligent rewriting? That's done by whatever LLM is already in your conversation. Claude Code, Claude Desktop, Cursor — they're right there. No need for a separate API call.
+
+### Regex Cleanup (runs on every call)
 
 | Category | Example | Becomes |
 |----------|---------|---------|
 | Em dashes | "results — especially" | "results. especially" |
-| Curly quotes | "smart quotes" | "smart quotes" |
+| Curly quotes | \u201Csmart quotes\u201D | "smart quotes" |
 | Banned phrases | "In order to" | "To" |
 | Copula fixes | "serves as" | "is" |
 | Contractions | "do not" | "don't" |
 | Filler removal | "It is important to note that" | *(removed)* |
 
-This is code, not a suggestion. Every rule fires on every run.
-
-### Tier 2 — Surgical AI Fix (needs `ANTHROPIC_API_KEY`)
-
-Scans each sentence individually for deeper patterns:
+### Detection (returned as a report)
 
 **AI Vocabulary (~40 words):**
 `crucial`, `delve`, `landscape`, `pivotal`, `underscore`, `showcase`, `foster`, `leverage`, `navigate`, `testament`, `tapestry`, `interplay`, `intricate`, `robust`, `holistic`, `synergy`, `paradigm`, `transformative`, `nuanced`, `multifaceted`, `myriad`, and more.
@@ -47,35 +52,35 @@ Scans each sentence individually for deeper patterns:
 **Structural Patterns (5 types):**
 - "Not only X, but also Y"
 - "It's not just X, it's Y"
-- "What strikes me / What stands out" (observation-announcement)
-- "The X isn't Y — it's Z" (reframe)
-- "The deeper issue" / "fundamentally" (persuasive authority)
+- "What strikes me / What stands out"
+- "The X isn't Y — it's Z"
+- "The deeper issue" / "fundamentally"
 
 **Rule-of-Three with Abstract Nouns:**
 "innovation, inspiration, and growth" — flagged. "apples, oranges, and bananas" — not flagged.
 
-When a sentence is flagged, only that sentence gets sent to a small Claude API call for rewriting. The rewrite then gets run through Tier 1 again, so even the fix gets cleaned.
-
 ## Tools
-
-The server exposes two tools:
 
 ### `humanize`
 
-Cleans AI tells from text.
+Cleans text with regex rules, then reports any remaining AI patterns for you (or your LLM) to rewrite.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `text` | string | *(required)* | The text to clean |
 | `mode` | `"inline"` or `"multiline"` | `"inline"` | Use `"multiline"` for blog posts or text with line breaks |
 
+**Output:** Cleaned text. If AI patterns remain, a list of flagged sentences with specific problems is appended.
+
 ### `check_ai_tells`
 
-Reports what AI patterns exist in the text without changing anything. Returns a detection report.
+Reports what AI patterns exist in the text without changing anything.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `text` | string | The text to analyze |
+
+**Output:** Detection report — sentence count, flagged sentences, problem types.
 
 ## Install
 
@@ -85,17 +90,9 @@ Reports what AI patterns exist in the text without changing anything. Returns a 
 claude mcp add humanize-mcp -- npx -y humanize-mcp
 ```
 
-For Tier 2 (with surgical AI fixes):
-
-```bash
-claude mcp add humanize-mcp -e ANTHROPIC_API_KEY=sk-ant-... -- npx -y humanize-mcp
-```
-
 ### Claude Desktop / Cursor / Other MCP Clients
 
 Add to your MCP config file:
-
-**Tier 1 only (free, no API key):**
 
 ```json
 {
@@ -108,44 +105,28 @@ Add to your MCP config file:
 }
 ```
 
-**Tier 1 + Tier 2 (needs API key):**
-
-```json
-{
-  "mcpServers": {
-    "humanize-mcp": {
-      "command": "npx",
-      "args": ["-y", "humanize-mcp"],
-      "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-..."
-      }
-    }
-  }
-}
-```
-
-Restart your client after adding the config.
+Restart your client after adding the config. That's it — no API keys needed.
 
 ## Usage Examples
 
-### Example 1: Clean a LinkedIn post
+### Example 1: Write and clean in one shot
 
-You: "Write me a LinkedIn post about remote work, then humanize it"
+You: *"Write me a LinkedIn post about remote work, then humanize it"*
 
-Claude writes the post, then calls the `humanize` tool. The output comes back with em dashes replaced, "crucial" swapped out, contractions enforced.
+Claude writes the post, calls `humanize`. Em dashes get replaced, banned phrases removed, contractions enforced. If any sentences still have AI vocabulary, Claude sees the report and rewrites those sentences, then runs `humanize` again to clean the rewrite.
 
 ### Example 2: Check before publishing
 
-You: "Run check_ai_tells on this blog post: [paste text]"
+You: *"Run check_ai_tells on this: [paste text]"*
 
 Output:
 ```
 ## AI Tell Detection Report
 
 Sentences analyzed: 42
-Sentences with Tier 2 problems: 3
+Sentences with AI patterns: 3
 Total problems found: 4
-Tier 1 issues (regex-fixable): Yes
+Regex-fixable issues: Yes
 
 ### Flagged Sentences
 
@@ -162,61 +143,55 @@ Tier 1 issues (regex-fixable): Yes
 
 ### Example 3: Clean a blog post (multiline)
 
-You: "Humanize this in multiline mode: [paste text]"
+You: *"Humanize this in multiline mode: [paste text]"*
 
 Multiline mode preserves your intentional line breaks — blank lines stay blank, each paragraph gets cleaned independently.
 
-### Example 4: Iterative workflow
+### Example 4: The full workflow
 
 1. Ask Claude to write something
 2. Run `check_ai_tells` to see what's flagged
-3. Decide if you care (1-2 flags on 50 sentences? Probably fine)
-4. Run `humanize` if you want to auto-fix
+3. Decide if you care (1 flag on 50 sentences? Probably fine)
+4. Run `humanize` to auto-fix regex issues + get a rewrite list
+5. Claude rewrites the flagged sentences
+6. Run `humanize` one more time to clean the rewrite
 
 ## Architecture
 
 ```
 humanize-mcp/
 ├── index.js          # MCP server — tool definitions + stdio transport
-├── humanizer.js      # Core engine — all detection and fix logic
+├── humanizer.js      # Core engine — regex rules + detection logic
 ├── package.json
 └── README.md
 ```
 
-### index.js — MCP Server (53 lines)
+### index.js — MCP Server (~100 lines)
 
-Registers two tools (`humanize` and `check_ai_tells`) with the MCP SDK and connects via stdio transport. Thin wrapper — all logic lives in `humanizer.js`.
+Registers two tools (`humanize` and `check_ai_tells`) with the MCP SDK. Connects via stdio transport. Thin wrapper — all logic lives in `humanizer.js`.
 
-### humanizer.js — Core Engine (229 lines)
+### humanizer.js — Core Engine (~140 lines)
 
-Four layers:
+Three layers, all deterministic:
 
 ```
 ┌─────────────────────────────────────────────────┐
 │  deAI(text)                                     │
-│  Tier 1: 30+ regex rules                        │
-│  Em dashes, curly quotes, banned phrases,       │
-│  copula fixes, contractions, cleanup artifacts  │
+│  30+ regex rules: em dashes, curly quotes,      │
+│  banned phrases, copula fixes, contractions,    │
+│  artifact cleanup                               │
+└────────────────────┬────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────┐
+│  splitSentences(text)                           │
+│  Break text into individual sentences           │
 └────────────────────┬────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────┐
 │  detectProblems(sentence)                       │
-│  Tier 2 detection: AI vocab (~40 words),        │
+│  Per-sentence scan: ~40 AI vocab words,         │
 │  5 structural patterns, rule-of-three           │
 │  Returns array of problem descriptions          │
-└────────────────────┬────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────┐
-│  fixSentence(sentence, problems, apiKey)        │
-│  Sends ONE flagged sentence to Claude API       │
-│  Small, focused prompt: "rewrite this sentence  │
-│  to fix [specific problem]"                     │
-└────────────────────┬────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────┐
-│  humanize(text, key) / humanizePost(text, key)  │
-│  Full pipeline: deAI → split → detect →         │
-│  fix flagged → deAI again on fixes              │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -226,44 +201,38 @@ Four layers:
 Input text
     │
     ▼
-deAI() ─── Tier 1 regex cleanup (always)
+deAI() ─── Regex cleanup (em dashes, quotes, phrases, contractions)
     │
     ▼
 splitSentences() ─── Break into individual sentences
     │
     ▼
-detectProblems() ─── Check each sentence for Tier 2 patterns
-    │
-    ├── No problems → keep sentence as-is
-    │
-    └── Problems found → fixSentence() via Claude API
-                              │
-                              ▼
-                         deAI() again ─── Clean the AI's fix too
+detectProblems() ─── Flag AI vocabulary + structural patterns
     │
     ▼
-Join sentences → final deAI() pass → Output
+Return cleaned text + detection report
+    │
+    ▼
+LLM rewrites flagged sentences (already in your conversation)
+    │
+    ▼
+humanize again ─── Clean the rewrite
 ```
 
-### Why This Architecture?
+### Why This Design?
 
 **Why not just prompt the AI to write better?**
-LLMs can't reliably suppress patterns during generation. "Don't use em dashes" gets loaded into context, then ignored when the model predicts the next token. Deterministic post-processing is the only reliable approach.
+LLMs load your "don't use em dashes" rule into context, then ignore it when predicting the next token. Deterministic post-processing is the only reliable approach.
 
-**Why surgical per-sentence fixes instead of rewriting the whole text?**
-Rewriting the whole text through an AI would re-introduce the same patterns. By isolating individual sentences and giving a tiny, focused prompt ("rewrite this one sentence to remove 'crucial'"), the model has a much smaller task and is less likely to introduce new tells. And `deAI()` runs on the fix too, as a safety net.
+**Why not have the MCP server call an AI API for rewrites?**
+The LLM is already in the conversation. Making the server call a separate API adds complexity (API keys, billing, latency) for no benefit. The server stays purely deterministic — no external dependencies, no keys, no cost.
 
-**Why two tiers?**
-Tier 1 catches the obvious, mechanical patterns (em dashes, curly quotes, stock phrases). It's free, instant, and deterministic. Tier 2 catches subtler patterns (word choice, sentence structure) that need AI judgment to fix properly. Users who want the free version still get significant value.
-
-## Requirements
-
-- Node.js 18+
-- For Tier 2: an Anthropic API key (`ANTHROPIC_API_KEY`)
+**Why return a detection report instead of silently fixing everything?**
+Transparency. You see exactly what was flagged and why. You decide if 1 "crucial" in 50 sentences matters. And the LLM in your conversation can make better rewriting decisions with the context of the full document than a blind per-sentence API call could.
 
 ## What Gets Detected
 
-### Tier 1 — Deterministic (28 banned phrases, 6 copula fixes, 24 contraction rules)
+### Regex Rules (28 banned phrases, 6 copula fixes, 24 contraction rules)
 
 **Banned phrases** — removed or simplified:
 - "In order to" → "To"
@@ -281,7 +250,6 @@ Tier 1 catches the obvious, mechanical patterns (em dashes, curly quotes, stock 
 - "serves as" → "is"
 - "stands as" → "is"
 - "acts as" → "is"
-- "functions as" → "is"
 - "boasts" → "has"
 - "features" → "has"
 
@@ -292,13 +260,19 @@ Tier 1 catches the obvious, mechanical patterns (em dashes, curly quotes, stock 
 - "it is" → "it's"
 - And 20 more
 
-### Tier 2 — AI Pattern Detection
+### AI Pattern Detection
 
-**~40 AI vocabulary words** including: crucial, delve, landscape, pivotal, underscore, showcase, foster, leverage, navigate, testament, tapestry, interplay, intricate, robust, holistic, synergy, paradigm, transformative, nuanced, multifaceted, myriad, vital, enduring, vibrant, profound, groundbreaking, nestled, renowned, elevate, empower, streamline, garnered, encompasses.
+**~40 vocabulary words** including: crucial, delve, landscape, pivotal, underscore, showcase, foster, leverage, navigate, testament, tapestry, interplay, intricate, robust, holistic, synergy, paradigm, transformative, nuanced, multifaceted, myriad, vital, enduring, vibrant, profound, groundbreaking, nestled, renowned, elevate, empower, streamline, garnered, encompasses.
 
 **5 structural patterns:** not-only-but, it's-not-just, observation-announcement, reframe, persuasive authority.
 
 **Rule-of-three** with abstract nouns (innovation, inspiration, growth, excellence, etc.)
+
+## Requirements
+
+- Node.js 18+
+
+That's it. No API keys. No accounts. No external services.
 
 ## License
 

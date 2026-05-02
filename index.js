@@ -3,44 +3,58 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { deAI, humanize, humanizePost, detectProblems, splitSentences } from "./humanizer.js";
-
-// Tier 1-only multiline cleanup (no API key needed)
-function deAIPost(text) {
-  return text.split('\n').map(line => line.trim() ? deAI(line) : '').join('\n');
-}
+import { deAI, detectProblems, splitSentences } from "./humanizer.js";
 
 const server = new McpServer({
-  name: "humanizer",
-  version: "1.0.0",
+  name: "humanize-mcp",
+  version: "2.0.0",
 });
 
-// Tool 1: humanize — clean AI tells from text
+// Tool 1: humanize — deterministic cleanup + detection report
 server.tool(
   "humanize",
-  "Remove AI tells from text. Runs 30+ deterministic regex fixes (em dashes, curly quotes, banned phrases, copula fixes, contractions). If ANTHROPIC_API_KEY is configured, also detects AI vocabulary and structural patterns per-sentence and surgically rewrites flagged sentences. Use multiline mode for blog posts and newsletters.",
+  "Remove AI tells from text using 30+ deterministic regex rules (em dashes, curly quotes, banned phrases, copula fixes, contractions). Returns cleaned text plus a report of any remaining AI patterns (vocabulary, structural) that need manual rewriting. Run this tool again after rewriting to catch anything new.",
   {
     text: z.string().describe("The text to humanize"),
     mode: z.enum(["inline", "multiline"]).default("inline").describe("Use 'inline' for single paragraphs/comments. Use 'multiline' for blog posts, newsletters, or any text with intentional line breaks."),
   },
   async ({ text, mode }) => {
-    const key = process.env.ANTHROPIC_API_KEY;
-
-    let result;
+    // Tier 1: deterministic regex cleanup
+    let cleaned;
     if (mode === "multiline") {
-      result = key ? await humanizePost(text, key) : deAIPost(text);
+      cleaned = text.split('\n').map(line => line.trim() ? deAI(line) : '').join('\n');
     } else {
-      result = key ? await humanize(text, key) : deAI(text);
+      cleaned = deAI(text);
     }
 
-    const tier = key
-      ? "Tier 1 (deterministic regex) + Tier 2 (AI pattern detection + surgical fix)"
-      : "Tier 1 only (deterministic regex). Set ANTHROPIC_API_KEY env var for Tier 2 surgical fixes.";
+    // Tier 2: detect remaining AI patterns
+    const allSentences = mode === "multiline"
+      ? cleaned.split('\n').flatMap(line => line.trim() ? splitSentences(line) : [])
+      : splitSentences(cleaned);
+
+    const flagged = [];
+    for (const sentence of allSentences) {
+      const problems = detectProblems(sentence);
+      if (problems.length > 0) {
+        flagged.push({ sentence, problems });
+      }
+    }
+
+    let output = cleaned;
+
+    if (flagged.length > 0) {
+      output += `\n\n---\n**${flagged.length} sentence${flagged.length > 1 ? 's' : ''} still flagged** (rewrite these, then run humanize again):\n\n`;
+      for (const { sentence, problems } of flagged) {
+        output += `> ${sentence}\n`;
+        for (const p of problems) {
+          output += `- ${p}\n`;
+        }
+        output += `\n`;
+      }
+    }
 
     return {
-      content: [
-        { type: "text", text: `${result}\n\n---\nProcessed with: ${tier}` },
-      ],
+      content: [{ type: "text", text: output }],
     };
   }
 );
@@ -71,9 +85,9 @@ server.tool(
 
     let output = `## AI Tell Detection Report\n\n`;
     output += `**Sentences analyzed:** ${sentences.length}\n`;
-    output += `**Sentences with Tier 2 problems:** ${report.length}\n`;
+    output += `**Sentences with AI patterns:** ${report.length}\n`;
     output += `**Total problems found:** ${totalProblems}\n`;
-    output += `**Tier 1 issues (regex-fixable):** ${tier1Changed ? "Yes" : "None detected"}\n\n`;
+    output += `**Regex-fixable issues:** ${tier1Changed ? "Yes" : "None detected"}\n\n`;
 
     if (report.length > 0) {
       output += `### Flagged Sentences\n\n`;
@@ -87,8 +101,8 @@ server.tool(
     }
 
     if (tier1Changed) {
-      output += `### Tier 1 Preview\n\n`;
-      output += `Deterministic cleanup would change the text. Call the \`humanize\` tool to apply fixes.\n`;
+      output += `### Regex Issues\n\n`;
+      output += `Deterministic cleanup would change the text (em dashes, curly quotes, banned phrases, etc). Call the \`humanize\` tool to apply fixes.\n`;
     }
 
     if (report.length === 0 && !tier1Changed) {
