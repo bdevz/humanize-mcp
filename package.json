@@ -1,0 +1,26 @@
+{
+  "name": "humanizer-mcp",
+  "version": "1.0.0",
+  "description": "MCP server that removes AI tells from text using deterministic regex cleanup and optional surgical AI fixes",
+  "type": "module",
+  "bin": {
+    "humanizer-mcp": "./index.js"
+  },
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
+  },
+  "keywords": [
+    "mcp",
+    "humanizer",
+    "ai-detection",
+    "deai",
+    "writing",
+    "claude"
+  ],
+  "license": "MIT"
+}
